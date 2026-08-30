@@ -2,7 +2,7 @@
 
 [Polski](#polski) | [English](#english)
 
-## 🇵🇱 Polski
+## Polski
 
 TransactFlow ETL to projekt z zakresu inżynierii danych, którego celem jest praktyczne przedstawienie procesu ETL na danych transakcyjnych z wykorzystaniem PostgreSQL.
 
@@ -151,7 +151,7 @@ Projekt jest udostępniany na licencji MIT.
 
 ---
 
-## 🇬🇧 English
+## English
 
 TransactFlow ETL is a data engineering project that demonstrates a practical ETL process using transaction data and PostgreSQL.
 
