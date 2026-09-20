@@ -4,61 +4,50 @@
 
 ## Polski
 
-TransactFlow ETL to projekt z zakresu inżynierii danych, którego celem jest praktyczne przedstawienie procesu ETL na danych transakcyjnych z wykorzystaniem PostgreSQL.
+TransactFlow ETL to projekt z zakresu inżynierii danych przedstawiający proces ETL dla danych transakcyjnych z wykorzystaniem Pythona i PostgreSQL.
 
-> **Status:** Obecna wersja projektu realizuje pełny przepływ ETL po stronie SQL, od rejestracji partii danych i warstwy surowej, przez walidację i obsługę błędów, po transformację, ładowanie poprawnych rekordów i podstawowe metryki jakości danych. Następnym krokiem będzie automatyzacja procesu w Pythonie.
+> **Status:** Projekt realizuje automatyczny przepływ od odczytu pliku CSV, przez rejestrację partii danych i załadowanie warstwy surowej, po walidację, obsługę błędów, transformację, zapis poprawnych rekordów oraz wyświetlenie podsumowania procesu.
+
 <br>
 
-### Aktualny przepływ danych
-
-Obecna implementacja SQL realizuje następujący przepływ:
+### Przepływ danych
 
 ```mermaid
 flowchart TD
-    A["CSV"] --> B["Rejestracja partii danych"]
-    B --> C["tabela transakcje_raw"]
-    C --> D["Walidacja jakości danych"]
-    D -->|Błędne rekordy| E["tabela transakcje_errors"]
-    D -->|Poprawne rekordy| F["Transformacja"]
-    F --> G["tabela transakcje"]
-    G --> H["Metryki jakości partii danych"]
-```
-<br>
-
-### Docelowa architektura
-
-Poniższy diagram przedstawia planowany przepływ danych, a nie aktualny stan implementacji.
-
-```mermaid
-flowchart TD
-    A["CSV / Excel"] --> B["Wczytywanie danych w Pythonie"]
-    B --> C["Rejestrowanie uruchomień ETL"]
+    A["Plik CSV"] --> B["Skrypt Pythonowy"]
+    B --> C["Rejestracja batcha"]
     C --> D["Warstwa surowa"]
-    D --> E["Walidacja i transformacja"]
-    E --> F["Odrzucone rekordy i błędy"]
-    E --> G["Poprawne rekordy"]
-    G --> H["Tabele docelowe PostgreSQL"]
-    H --> I["Warstwa raportowa"]
-    I --> J["Power BI"]
+    D --> E["Procedura process_batch"]
+    E -->|Błędne rekordy| F["transakcje_errors"]
+    E -->|Poprawne rekordy| G["transakcje"]
+    F --> H["Podsumowanie"]
+    G --> H
 ```
+
+Skrypt `python/run_etl.py`:
+
+1. odczytuje plik CSV i sprawdza jego strukturę;
+2. łączy się z PostgreSQL na podstawie konfiguracji z pliku `.env`;
+3. tworzy wpis w `etl_batches`;
+4. ładuje dane źródłowe do tabeli `transakcje_raw`;
+5. wywołuje procedurę `process_batch`;
+6. pobiera status oraz metryki przetworzonego batcha;
+7. wyświetla podsumowanie w terminalu.
+
+Procedura składowana wykonuje walidację danych, zapisuje wykryte błędy, przekształca poprawne wartości, ładuje rekordy do tabeli docelowej oraz aktualizuje status batcha.
+
 <br>
 
-### Aktualny stan repozytorium
+### Warstwy danych
 
-- relacyjna tabela referencyjna `klienci`;
-- `etl_batches` do rejestrowania kolejnych partii danych i stanu procesu ETL;
-- warstwa surowa `transakcje_raw`, przechowująca wartości źródłowe jako `TEXT`;
-- powiązanie rekordów surowych z konkretną partią danych przez `batch_id`;
-- profilowanie jakości danych przy użyciu zapytań SQL;
-- tabela `transakcje_errors`, przechowująca wykryte naruszenia reguł jakości;
-- spójny mechanizm walidacji oparty na `INSERT INTO ... SELECT` i `UNION ALL`;
-- transformacja poprawnych rekordów do właściwych typów danych;
-- ładowanie poprawnych rekordów do tabeli docelowej `transakcje`;
-- śledzenie pochodzenia danych przez `source_raw_id`;
-- zabezpieczenie przed wielokrotnym zapisaniem tych samych błędów i ponownym załadowaniem tych samych rekordów;
-- rejestrowanie statusu rozpoczęcia i zakończenia procesu;
-- zbiorcze metryki jakości dla pojedynczej partii danych;
-- mały zestaw testowy zawierający poprawne i celowo błędne rekordy.
+- `klienci` — dane referencyjne klientów;
+- `etl_batches` — informacje o kolejnych partiach danych i stanie ich przetwarzania;
+- `transakcje_raw` — warstwa surowa przechowująca wartości źródłowe jako `TEXT`;
+- `transakcje_errors` — błędy wykryte podczas walidacji;
+- `transakcje` — poprawne i przekształcone rekordy docelowe.
+
+Każdy rekord warstwy surowej jest przypisany do konkretnego batcha. Pole `source_raw_id` w tabeli docelowej pozwala powiązać przetworzony rekord z jego źródłem.
+
 <br>
 
 ### Zaimplementowane kontrole jakości
@@ -66,81 +55,158 @@ flowchart TD
 | Obszar | Kontrola |
 |---|---|
 | Wymagane pola | Wykrywanie wartości `NULL`, pustych pól i samych białych znaków |
-| Identyfikator klienta | Wykrywanie nieistniejących identyfikatorów klientów |
-| Unikalność | Wykrywanie duplikatów `external_id` |
-| Format kwoty | Rozpoznawanie wartości liczbowych z kropką lub przecinkiem jako separatorem dziesiętnym |
+| Identyfikator klienta | Wykrywanie identyfikatorów nieobecnych w tabeli referencyjnej |
+| Unikalność | Wykrywanie duplikatów `external_id` w obrębie batcha |
+| Format kwoty | Obsługa kropki lub przecinka jako separatora dziesiętnego |
 | Zakres kwoty | Wykrywanie kwot mniejszych lub równych zero |
-| Typ transakcji | Kontrola dozwolonych wartości po usunięciu spacji i normalizacji wielkości liter |
-| Polskie znaki | Użycie kolacji `pg_unicode_fast` podczas normalizacji typów transakcji |
-| Format daty | Kontrola oczekiwanej struktury `DD.MM.YYYY HH:MM:SS` |
-| Nadmiarowe spacje | Normalizacja powtarzających się białych znaków przed walidacją daty |
-| Poprawność daty | Wykrywanie wartości o poprawnym formacie, ale nieprawidłowej dacie lub godzinie |
-<br>
+| Typ transakcji | Kontrola dozwolonych wartości po normalizacji tekstu |
+| Format daty | Kontrola struktury `DD.MM.YYYY HH:MM:SS` |
+| Nadmiarowe spacje | Normalizacja powtarzających się białych znaków |
+| Poprawność daty | Wykrywanie nieprawidłowych wartości daty lub godziny |
 
-### Aktualnie rozwijane
+Zapis błędów i ładowanie rekordów są idempotentne — ponowne wykonanie instrukcji nie powoduje wielokrotnego zapisania tego samego błędu ani tego samego rekordu docelowego.
 
-Kolejny etap projektu obejmuje automatyzację procesu ETL w Pythonie:
-
-- odczyt danych z plików CSV;
-- połączenie z PostgreSQL;
-- automatyczne tworzenie wpisu w `etl_batches` dla każdej nowej partii danych;
-- ładowanie danych źródłowych do `transakcje_raw`;
-- uruchamianie walidacji, transformacji i ładowania danych z poziomu Pythona;
-- automatyczna obsługa statusów `STARTED`, `SUCCESS` i `FAILED`;
-- obsługa wyjątków i rejestrowanie przebiegu procesu;
-- przechowywanie konfiguracji połączenia poza kodem, np. w pliku `.env`.
 <br>
 
 ### Struktura repozytorium
 
 ```text
 data/
-└── transakcje_raw.csv          # przykładowe dane zawierające celowe błędy
+└── transakcje_raw.csv          # dane testowe z celowymi błędami
+
+python/
+├── check_connection.py         # test połączenia z PostgreSQL
+└── run_etl.py                  # automatyczne uruchomienie procesu ETL
+
 sql/
-├── 01_schema.sql               # bazowe tabele projektu
-├── 02_raw_layer.sql            # warstwa surowa danych transakcyjnych
-├── 03_reference_data.sql       # przykładowe dane referencyjne klientów
+├── 01_schema.sql               # tabele bazowe i rejestr batchy
+├── 02_raw_layer.sql            # warstwa surowa
+├── 03_reference_data.sql       # przykładowe dane klientów
 ├── 04_etl_tables.sql           # tabela błędów i tabela docelowa
-├── 05_data_quality_checks.sql  # zapytania profilujące jakość danych
-├── 06_validation.sql           # walidacja danych i zapis wykrytych błędów
-├── 07_load.sql                 # transformacja i ładowanie poprawnych rekordów
-└── 08_batch_metrics.sql        # metryki jakości partii danych
+├── 05_data_quality_checks.sql  # profilowanie jakości danych
+├── 06_validation.sql           # samodzielny skrypt walidacji
+├── 07_load.sql                 # samodzielny skrypt ładowania
+├── 08_batch_metrics.sql        # metryki jakości batcha
+└── 09_process_batch.sql        # procedura automatyzująca przetwarzanie
+
+.env.example                    # przykładowa konfiguracja połączenia
+requirements.txt                # zależności Pythona
 LICENSE
-.gitignore
+README.md
 ```
+
+Skrypty `06_validation.sql`, `07_load.sql` i `08_batch_metrics.sql` pozostawiono jako samodzielne elementy prezentujące poszczególne etapy procesu. Procedura `09_process_batch.sql` łączy walidację, transformację, ładowanie i obsługę statusu dla wskazanego batcha.
+
+<br>
+
+### Wymagania
+
+- Python 3.10 lub nowszy;
+- PostgreSQL;
+- dostępna kolacja `pg_unicode_fast`;
+- utworzona baza danych;
+- dane dostępowe użytkownika posiadającego uprawnienia do używanych tabel i procedury.
+
+<br>
+
+### Konfiguracja
+
+#### 1. Pobranie repozytorium
+
+```bash
+git clone https://github.com/S0phrine/TransactFlow-ETL.git
+cd TransactFlow-ETL
+```
+
+#### 2. Utworzenie środowiska wirtualnego
+
+macOS lub Linux:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+Windows:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\activate
+```
+
+#### 3. Instalacja zależności
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+#### 4. Konfiguracja połączenia
+
+Skopiuj `.env.example` jako `.env` i uzupełnij dane:
+
+```text
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=nazwa_bazy
+DB_USER=nazwa_uzytkownika
+DB_PASSWORD=haslo
+```
+
+Plik `.env` jest ignorowany przez Git i nie powinien być publikowany.
+
+#### 5. Przygotowanie bazy
+
+Uruchom kolejno:
+
+```text
+sql/01_schema.sql
+sql/02_raw_layer.sql
+sql/03_reference_data.sql
+sql/04_etl_tables.sql
+sql/09_process_batch.sql
+```
+
+#### 6. Uruchomienie procesu ETL
+
+```bash
+python python/run_etl.py data/transakcje_raw.csv
+```
+
+Dla dołączonego pliku testowego oczekiwany wynik to:
+
+```text
+Wszystkie rekordy:  20
+Załadowane:         7
+Odrzucone:          13
+```
+
+Status `SUCCESS` oznacza, że cały batch został poprawnie przetworzony. Nie oznacza, że każdy rekord źródłowy był prawidłowy — błędne rekordy są rejestrowane w `transakcje_errors`.
+
 <br>
 
 ### Technologie
 
-- **Obecnie:** PostgreSQL, SQL, DBeaver, CSV, Git i GitHub
-- **Planowane:** Python, pliki Excel, Power BI oraz opcjonalnie Docker
+- Python;
+- PostgreSQL i PL/pgSQL;
+- psycopg;
+- python-dotenv;
+- SQL;
+- CSV;
+- DBeaver;
+- Git i GitHub.
+
 <br>
 
-### Plan rozwoju
+### Dalszy rozwój
 
-#### Automatyzacja w Pythonie
+- obsługa plików `.xlsx`;
+- przygotowanie większych partii danych;
+- dodanie indeksów wspierających przetwarzanie;
+- rozbudowa logowania i testów automatycznych;
+- utworzenie warstwy raportowej;
+- przygotowanie dashboardów w Power BI;
+- opcjonalna konteneryzacja przy użyciu Dockera.
 
-- odczyt plików CSV, a następnie również `.xlsx`;
-- połączenie z PostgreSQL i automatyczne utworzenie wpisu opisującego nową partię danych;
-- załadowanie danych do warstwy surowej;
-- uruchamianie walidacji, transformacji i ładowania z poziomu Pythona;
-- automatyczna obsługa statusów `STARTED`, `SUCCESS` i `FAILED`;
-- obsługa wyjątków i rejestrowanie przebiegu procesu;
-- przechowywanie konfiguracji połączenia poza kodem, np. w pliku `.env`.
-
-#### Dalszy rozwój SQL
-
-- uniezależnienie walidacji dat od ustawienia sesji `DateStyle`;
-- dodanie odpowiednich indeksów;
-- objęcie procesu odpowiednimi transakcjami;
-- dalsze rozwijanie metryk procesu ETL.
-
-#### Dane i raportowanie
-
-- pozostawienie obecnego pliku zawierającego 20 rekordów jako małego zestawu testowego do walidacji;
-- przygotowanie większej partii danych do testowania kolejnych uruchomień procesu;
-- utworzenie warstwy raportowej w PostgreSQL;
-- przygotowanie dashboardów Power BI dotyczących transakcji oraz jakości procesu ETL.
 <br>
 
 ## Licencja
@@ -153,61 +219,50 @@ Projekt jest udostępniany na licencji MIT.
 
 ## English
 
-TransactFlow ETL is a data engineering project that demonstrates a practical ETL process using transaction data and PostgreSQL.
+TransactFlow ETL is a data engineering project demonstrating an ETL process for transaction data using Python and PostgreSQL.
 
-> **Status:** The current version implements the full ETL flow on the SQL side, from batch registration and the raw data layer, through validation and error handling, to transformation, loading of valid records and basic data quality metrics. The next step is to automate the process using Python.
+> **Status:** The project implements an automated flow from reading a CSV file and registering a data batch to loading the raw layer, validating records, handling errors, transforming valid values, loading target records and displaying a process summary.
+
 <br>
 
-### Current data flow
-
-The current SQL implementation follows this flow:
+### Data flow
 
 ```mermaid
 flowchart TD
-    A["CSV"] --> B["Data batch registration"]
-    B --> C["transakcje_raw table"]
-    C --> D["Data quality validation"]
-    D -->|Invalid records| E["transakcje_errors table"]
-    D -->|Valid records| F["Transformation"]
-    F --> G["transakcje table"]
-    G --> H["Data batch quality metrics"]
-```
-<br>
-
-### Target architecture
-
-The diagram presents the intended data flow, not the current implementation.
-
-```mermaid
-flowchart TD
-    A["CSV / Excel"] --> B["Python ingestion"]
-    B --> C["ETL batch tracking"]
+    A["CSV file"] --> B["Python script"]
+    B --> C["Batch registration"]
     C --> D["Raw data layer"]
-    D --> E["Validation and transformation"]
-    E --> F["Rejected records and errors"]
-    E --> G["Valid records"]
-    G --> H["PostgreSQL target tables"]
-    H --> I["Reporting layer"]
-    I --> J["Power BI"]
+    D --> E["process_batch procedure"]
+    E -->|Invalid records| F["transakcje_errors"]
+    E -->|Valid records| G["transakcje"]
+    F --> H["Process summary"]
+    G --> H
 ```
+
+The `python/run_etl.py` script:
+
+1. reads a CSV file and validates its structure;
+2. connects to PostgreSQL using configuration loaded from `.env`;
+3. creates an entry in `etl_batches`;
+4. loads source data into `transakcje_raw`;
+5. calls the `process_batch` procedure;
+6. retrieves the status and metrics of the processed batch;
+7. displays a summary in the terminal.
+
+The stored procedure validates the data, records detected errors, transforms valid values, loads target records and updates the batch status.
+
 <br>
 
-### Current repository state
+### Data layers
 
-- relational `klienci` reference table;
-- `etl_batches` for tracking individual data batches and ETL processing status;
-- `transakcje_raw` raw layer storing source values as `TEXT`;
-- association of raw records with a specific data batch through `batch_id`;
-- SQL-based data quality profiling;
-- `transakcje_errors` table storing detected data quality violations;
-- consolidated validation logic based on `INSERT INTO ... SELECT` and `UNION ALL`;
-- transformation of valid records into appropriate data types;
-- loading of valid records into the target `transakcje` table;
-- data lineage through `source_raw_id`;
-- protection against duplicate error recording and duplicate target loading;
-- tracking of process start and completion status;
-- combined quality metrics for an individual data batch;
-- a small test dataset containing valid and intentionally invalid records.
+- `klienci` — customer reference data;
+- `etl_batches` — information about data batches and their processing status;
+- `transakcje_raw` — raw layer storing source values as `TEXT`;
+- `transakcje_errors` — validation errors;
+- `transakcje` — valid and transformed target records.
+
+Each raw record is assigned to a specific batch. The `source_raw_id` column in the target table links a processed record to its source.
+
 <br>
 
 ### Implemented data-quality checks
@@ -215,81 +270,158 @@ flowchart TD
 | Area | Check |
 |---|---|
 | Required fields | Detects `NULL`, empty and whitespace-only values |
-| Customer reference | Detects customer identifiers that do not exist in the customer reference table |
-| Uniqueness | Detects duplicate `external_id` values |
-| Amount format | Recognises numeric text with a dot or comma decimal separator |
+| Customer identifier | Detects identifiers missing from the reference table |
+| Uniqueness | Detects duplicate `external_id` values within a batch |
+| Amount format | Supports a dot or comma as a decimal separator |
 | Amount range | Detects zero and negative amounts |
-| Transaction type | Validates allowed values after trimming and case normalisation |
-| Polish characters | Uses the `pg_unicode_fast` collation when normalising transaction types |
-| Date format | Validates the expected `DD.MM.YYYY HH:MM:SS` structure |
-| Whitespace | Normalises repeated whitespace before date validation |
-| Timestamp validity | Detects structurally correct values that do not represent a valid date or time |
-<br>
+| Transaction type | Validates allowed values after text normalisation |
+| Date format | Validates the `DD.MM.YYYY HH:MM:SS` structure |
+| Excess whitespace | Normalises repeated whitespace characters |
+| Timestamp validity | Detects invalid date or time values |
 
-### Work in progress
+Error recording and target loading are idempotent — running the relevant instructions again does not insert the same error or target record more than once.
 
-The next stage of the project focuses on automating the ETL process in Python:
-
-- reading data from CSV files;
-- connecting to PostgreSQL;
-- automatically creating an entry in `etl_batches` for each new data batch;
-- loading source data into `transakcje_raw`;
-- running validation, transformation and loading from Python;
-- automatically handling `STARTED`, `SUCCESS` and `FAILED` statuses;
-- exception handling and process logging;
-- storing connection configuration outside the code, for example in a `.env` file.
 <br>
 
 ### Repository structure
 
 ```text
 data/
-└── transakcje_raw.csv          # sample data containing intentional errors
+└── transakcje_raw.csv          # test data containing intentional errors
+
+python/
+├── check_connection.py         # PostgreSQL connection test
+└── run_etl.py                  # automated ETL process
+
 sql/
-├── 01_schema.sql               # core project tables
-├── 02_raw_layer.sql            # raw transaction data layer
-├── 03_reference_data.sql       # sample customer reference data
+├── 01_schema.sql               # core tables and batch registry
+├── 02_raw_layer.sql            # raw data layer
+├── 03_reference_data.sql       # sample customer data
 ├── 04_etl_tables.sql           # error and target tables
-├── 05_data_quality_checks.sql  # data quality profiling queries
-├── 06_validation.sql           # data validation and error recording
-├── 07_load.sql                 # transformation and loading of valid records
-└── 08_batch_metrics.sql        # data batch quality metrics
+├── 05_data_quality_checks.sql  # data-quality profiling
+├── 06_validation.sql           # standalone validation script
+├── 07_load.sql                 # standalone loading script
+├── 08_batch_metrics.sql        # batch quality metrics
+└── 09_process_batch.sql        # automated batch-processing procedure
+
+.env.example                    # example connection configuration
+requirements.txt                # Python dependencies
 LICENSE
-.gitignore
+README.md
 ```
+
+The `06_validation.sql`, `07_load.sql` and `08_batch_metrics.sql` files are retained as standalone components presenting individual processing stages. The `09_process_batch.sql` procedure combines validation, transformation, loading and status handling for a selected batch.
+
+<br>
+
+### Requirements
+
+- Python 3.10 or newer;
+- PostgreSQL;
+- the `pg_unicode_fast` collation;
+- an existing database;
+- a database user authorised to access the required tables and procedure.
+
+<br>
+
+### Setup
+
+#### 1. Clone the repository
+
+```bash
+git clone https://github.com/S0phrine/TransactFlow-ETL.git
+cd TransactFlow-ETL
+```
+
+#### 2. Create a virtual environment
+
+macOS or Linux:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+Windows:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\activate
+```
+
+#### 3. Install dependencies
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+#### 4. Configure the connection
+
+Copy `.env.example` to `.env` and provide the connection details:
+
+```text
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=database_name
+DB_USER=database_user
+DB_PASSWORD=password
+```
+
+The `.env` file is ignored by Git and should not be published.
+
+#### 5. Prepare the database
+
+Run the following scripts in order:
+
+```text
+sql/01_schema.sql
+sql/02_raw_layer.sql
+sql/03_reference_data.sql
+sql/04_etl_tables.sql
+sql/09_process_batch.sql
+```
+
+#### 6. Run the ETL process
+
+```bash
+python python/run_etl.py data/transakcje_raw.csv
+```
+
+The expected result for the included test file is:
+
+```text
+Wszystkie rekordy:  20
+Załadowane:         7
+Odrzucone:          13
+```
+
+The `SUCCESS` status means that the batch was processed successfully. It does not mean that every source record was valid — rejected records are stored in `transakcje_errors`.
+
 <br>
 
 ### Technologies
 
-- **Currently used:** PostgreSQL, SQL, DBeaver, CSV, Git and GitHub
-- **Planned:** Python, Excel files, Power BI and optionally Docker
+- Python;
+- PostgreSQL and PL/pgSQL;
+- psycopg;
+- python-dotenv;
+- SQL;
+- CSV;
+- DBeaver;
+- Git and GitHub.
+
 <br>
 
 ### Roadmap
 
-#### Python automation
+- support for `.xlsx` files;
+- preparation of larger data batches;
+- indexes supporting data processing;
+- extended logging and automated tests;
+- a reporting layer;
+- Power BI dashboards;
+- optional containerisation using Docker.
 
-- read CSV files and later support `.xlsx`;
-- connect to PostgreSQL and automatically create an entry describing a new data batch;
-- load data into the raw layer;
-- run validation, transformation and loading from Python;
-- automatically handle `STARTED`, `SUCCESS` and `FAILED` statuses;
-- add exception handling and process logging;
-- keep connection configuration outside the code, for example in a `.env` file.
-
-#### Further SQL development
-
-- make timestamp validation independent of the session `DateStyle` setting;
-- add appropriate indexes;
-- wrap the process in suitable database transactions;
-- further extend ETL process metrics.
-
-#### Data and reporting
-
-- keep the current 20-row file as a small validation test dataset;
-- prepare a larger data batch for testing subsequent ETL runs;
-- create a PostgreSQL reporting layer;
-- build Power BI dashboards for transaction data and ETL data quality.
 <br>
 
 ## License
